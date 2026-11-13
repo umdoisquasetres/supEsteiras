@@ -30,21 +30,30 @@ class SerialManager {
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   private isReading = false;
   private state: ConnectionState = 'disconnected';
-  private currentBaudRate = 115200;
+  private currentBaudRate = 9600;
 
   // Simulation state
   private isSimulated = false;
   private simulatedConfig: PicConfig = { ...DEFAULT_PIC_CONFIG };
   private simulatedTelemetry: PicTelemetry = {
-    currentTemp: 24.6,
-    vccVoltage: 5.02,
-    uptimeSeconds: 84,
-    relay1: false,
-    relay2: true,
-    pwmDuty: 50,
+    rpm1: 45.0,
+    rpm2: 44.8,
+    laps1: 142,
+    laps2: 142,
+    deltaLaps: 0,
+    inv1Volt: 5.0,
+    inv2Volt: 5.04,
+    inv1Duty: 50,
+    inv2Duty: 50,
+    syncStatus: 'SYNCED',
+    vccVoltage: 5.01,
+    uptimeSeconds: 120,
     lastUpdate: Date.now()
   };
   private simulationInterval: number | null = null;
+  private simIntegralError = 0;
+  private simFractionalLaps1 = 142.0;
+  private simFractionalLaps2 = 142.0;
 
   // Event listeners
   private stateListeners: Set<StateListener> = new Set();
@@ -103,7 +112,7 @@ class SerialManager {
   /**
    * Connect to a physical serial port via Web Serial API
    */
-  public async connectPhysical(baudRate: number = 115200): Promise<boolean> {
+  public async connectPhysical(baudRate: number = 9600): Promise<boolean> {
     if (!this.isWebSerialSupported()) {
       this.addLog('error', 'Web Serial API não é suportada neste navegador. Use Chrome, Edge ou Opera.');
       return false;
@@ -112,93 +121,144 @@ class SerialManager {
     try {
       this.setState('connecting');
       this.currentBaudRate = baudRate;
-      this.addLog('info', `Solicitando porta serial do sistema (Baud: ${baudRate})...`);
+      this.addLog('info', `Solicitando porta serial para PIC18F4620 (Baud: ${baudRate})...`);
 
       const nav = navigator as unknown as { serial: { requestPort: () => Promise<SerialPort> } };
       this.port = await nav.serial.requestPort();
 
       await this.port.open({
-        baudRate,
+        baudRate: this.currentBaudRate,
         dataBits: 8,
         stopBits: 1,
         parity: 'none'
       });
 
-      this.isSimulated = false;
       this.setState('connected');
-      this.addLog('success', `Conectado com sucesso à porta serial a ${baudRate} bps!`);
+      this.addLog('success', `Conectado com sucesso ao PIC18F4620 na taxa de ${this.currentBaudRate} bps!`);
 
-      // Start reading stream
+      // Read loop in background
       this.startReading();
 
-      // Automatically request initial status and config
-      setTimeout(() => {
-        this.sendCommand('PING');
-      }, 300);
-      setTimeout(() => {
-        this.sendCommand('GET_ALL');
-      }, 600);
+      // Solicit current status and settings
+      setTimeout(() => this.sendCommand('PING'), 200);
+      setTimeout(() => this.sendCommand('GET_ALL'), 600);
 
       return true;
     } catch (err: unknown) {
-      this.port = null;
       this.setState('disconnected');
       const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes('No port selected') || msg.includes('cancelled')) {
-        this.addLog('info', 'Seleção de porta cancelada pelo usuário.');
+      if (msg.includes('No port selected') || msg.includes('canceled')) {
+        this.addLog('info', 'Seleção de porta serial cancelada pelo usuário.');
       } else {
-        this.addLog('error', `Falha ao conectar: ${msg}`);
+        this.addLog('error', `Falha ao conectar na porta serial: ${msg}`);
       }
       return false;
     }
   }
 
   /**
-   * Connect to the virtual/simulated PIC for offline testing and preview
+   * Start simulation mode
    */
-  public connectSimulation(baudRate: number = 115200): void {
+  public startSimulation() {
+    this.disconnect();
     this.isSimulated = true;
-    this.currentBaudRate = baudRate;
     this.setState('simulated');
-    this.addLog('info', `[SIMULAÇÃO] PIC18F virtual iniciado a ${baudRate} bps.`);
-    this.addLog('success', '[SIMULAÇÃO] Dispositivo virtual pronto! Responde a comandos PING, GET_ALL, SET, SAVE, etc.');
+    this.addLog('info', 'Modo de Simulação Ativado (PIC18F4620 Virtual @ 8MHz).');
 
-    // Start background simulation ticker (telemetry)
-    if (this.simulationInterval) clearInterval(this.simulationInterval);
+    // Emit initial config
+    setTimeout(() => {
+      this.configListeners.forEach((l) => l(this.simulatedConfig));
+      this.addLog('info', 'Parâmetros iniciais carregados da EEPROM simulada.');
+    }, 150);
+
+    // Dynamic conveyor physics simulation loop (500ms)
     this.simulationInterval = window.setInterval(() => {
-      if (this.state !== 'simulated') return;
-      this.simulatedTelemetry.uptimeSeconds += 2;
-      // Slight temperature wiggle
-      const delta = (Math.random() - 0.5) * 0.4;
-      this.simulatedTelemetry.currentTemp = parseFloat(
-        (this.simulatedTelemetry.currentTemp + delta).toFixed(1)
-      );
-      this.simulatedTelemetry.lastUpdate = Date.now();
-      this.telemetryListeners.forEach((l) => l(this.simulatedTelemetry));
-    }, 2000);
+      if (!this.isSimulated) return;
 
-    // Initial ping & get_all in simulation
-    setTimeout(() => {
-      this.processSimulatedCommand('PING');
-    }, 200);
-    setTimeout(() => {
-      this.processSimulatedCommand('GET_ALL');
-    }, 400);
+      const cfg = this.simulatedConfig;
+      this.simulatedTelemetry.uptimeSeconds += 1;
+      this.simulatedTelemetry.lastUpdate = Date.now();
+
+      if (cfg.opMode === 'STOP' || (!cfg.inverter1Enabled && !cfg.inverter2Enabled)) {
+        this.simulatedTelemetry.rpm1 = 0;
+        this.simulatedTelemetry.rpm2 = 0;
+        this.simulatedTelemetry.inv1Volt = 0;
+        this.simulatedTelemetry.inv2Volt = 0;
+        this.simulatedTelemetry.syncStatus = 'STOPPED';
+        this.telemetryListeners.forEach((l) => l({ ...this.simulatedTelemetry }));
+        return;
+      }
+
+      // Base RPM proportional to Inverter 1 Voltage (e.g. 10V = 90 RPM, 5V = 45 RPM)
+      let v1 = cfg.inverter1Enabled ? cfg.baseVolt1 : 0.0;
+      let targetRpm1 = (v1 / 10.0) * 90.0;
+      let actualRpm1 = Math.max(0, targetRpm1 + (Math.random() * 0.4 - 0.2));
+
+      // Synchronization algorithm for Conveyor 2:
+      // Error in laps: delta = laps1 - laps2
+      const deltaLaps = this.simulatedTelemetry.laps1 - this.simulatedTelemetry.laps2;
+      this.simulatedTelemetry.deltaLaps = deltaLaps;
+
+      let v2 = cfg.inverter2Enabled ? cfg.baseVolt2 : 0.0;
+
+      if (cfg.opMode === 'AUTO_SYNC' && cfg.inverter1Enabled && cfg.inverter2Enabled) {
+        // PI synchronization controller
+        this.simIntegralError += deltaLaps * 0.1;
+        this.simIntegralError = Math.max(-2.0, Math.min(2.0, this.simIntegralError));
+
+        let correction = (cfg.kp * deltaLaps) + (cfg.ki * this.simIntegralError);
+        correction = Math.max(-cfg.maxCorrectionVolt, Math.min(cfg.maxCorrectionVolt, correction));
+
+        v2 = Math.max(0.0, Math.min(10.0, cfg.baseVolt2 + correction));
+
+        if (Math.abs(deltaLaps) <= cfg.syncToleranceLaps) {
+          this.simulatedTelemetry.syncStatus = 'SYNCED';
+        } else if (Math.abs(deltaLaps) > 5) {
+          this.simulatedTelemetry.syncStatus = 'DESYNC_ALARM';
+        } else {
+          this.simulatedTelemetry.syncStatus = 'ADJUSTING';
+        }
+      } else {
+        this.simulatedTelemetry.syncStatus = 'SYNCED';
+      }
+
+      let targetRpm2 = (v2 / 10.0) * 90.0;
+      let actualRpm2 = Math.max(0, targetRpm2 + (Math.random() * 0.4 - 0.2));
+
+      // Update fractional laps (dt = 0.5s = 0.5/60 min)
+      if (cfg.inverter1Enabled) {
+        this.simFractionalLaps1 += (actualRpm1 * 0.5) / 60.0;
+        this.simulatedTelemetry.laps1 = Math.floor(this.simFractionalLaps1);
+      }
+      if (cfg.inverter2Enabled) {
+        this.simFractionalLaps2 += (actualRpm2 * 0.5) / 60.0;
+        this.simulatedTelemetry.laps2 = Math.floor(this.simFractionalLaps2);
+      }
+
+      this.simulatedTelemetry.rpm1 = parseFloat(actualRpm1.toFixed(1));
+      this.simulatedTelemetry.rpm2 = parseFloat(actualRpm2.toFixed(1));
+      this.simulatedTelemetry.inv1Volt = parseFloat(v1.toFixed(2));
+      this.simulatedTelemetry.inv2Volt = parseFloat(v2.toFixed(2));
+      this.simulatedTelemetry.inv1Duty = Math.round((v1 / 10.0) * 100);
+      this.simulatedTelemetry.inv2Duty = Math.round((v2 / 10.0) * 100);
+      this.simulatedTelemetry.vccVoltage = +(5.0 + Math.random() * 0.04 - 0.02).toFixed(2);
+
+      this.telemetryListeners.forEach((l) => l({ ...this.simulatedTelemetry }));
+    }, 500);
   }
 
   /**
-   * Disconnect from either physical or virtual device
+   * Stop simulation or disconnect physical
    */
   public async disconnect(): Promise<void> {
-    if (this.simulationInterval) {
-      clearInterval(this.simulationInterval);
-      this.simulationInterval = null;
-    }
-
     if (this.isSimulated) {
+      if (this.simulationInterval !== null) {
+        clearInterval(this.simulationInterval);
+        this.simulationInterval = null;
+      }
       this.isSimulated = false;
       this.setState('disconnected');
-      this.addLog('info', '[SIMULAÇÃO] PIC virtual desconectado.');
+      this.addLog('info', 'Simulação finalizada.');
       return;
     }
 
@@ -206,8 +266,8 @@ class SerialManager {
     if (this.reader) {
       try {
         await this.reader.cancel();
-      } catch (e) {
-        console.warn('Reader cancel error:', e);
+      } catch {
+        // ignore
       }
       this.reader = null;
     }
@@ -215,8 +275,8 @@ class SerialManager {
     if (this.port) {
       try {
         await this.port.close();
-      } catch (e) {
-        console.warn('Port close error:', e);
+      } catch {
+        // ignore
       }
       this.port = null;
     }
@@ -313,15 +373,15 @@ class SerialManager {
     this.addLog('rx', `RX: ${line}`);
 
     // Check if configuration line
-    if (line.startsWith('CFG:') || (line.includes('NAME=') && line.includes('BAUD='))) {
+    if (line.startsWith('CFG:') || (line.includes('NAME=') && line.includes('KP='))) {
       const parsedConfig = parseConfigString(line);
       this.configListeners.forEach((l) => l(parsedConfig));
-      this.addLog('info', 'Configurações do PIC sincronizadas.');
+      this.addLog('info', 'Configurações de sincronismo do PIC sincronizadas.');
       return;
     }
 
     // Check if telemetry line
-    if (line.startsWith('STATUS:') || (line.includes('TEMP=') && line.includes('VCC='))) {
+    if (line.startsWith('STATUS:') || (line.includes('RPM1=') && line.includes('LAPS1='))) {
       const parsedTelemetry = parseTelemetryString(line);
       if (parsedTelemetry) {
         this.telemetryListeners.forEach((l) => l(parsedTelemetry));
@@ -345,7 +405,7 @@ class SerialManager {
     const upperCmd = cmd.toUpperCase();
 
     if (upperCmd === 'PING') {
-      this.handleIncomingLine('PONG');
+      this.handleIncomingLine('PONG (PIC18F4620 ONLINE)');
       return;
     }
 
@@ -356,93 +416,67 @@ class SerialManager {
     }
 
     if (upperCmd === 'STATUS') {
-      const { currentTemp, vccVoltage, uptimeSeconds, relay1, relay2, pwmDuty } = this.simulatedTelemetry;
+      const { rpm1, rpm2, laps1, laps2, deltaLaps, inv1Volt, inv2Volt, syncStatus, vccVoltage, uptimeSeconds } = this.simulatedTelemetry;
       this.handleIncomingLine(
-        `STATUS:TEMP=${currentTemp.toFixed(1)};VCC=${vccVoltage.toFixed(2)};UPTIME=${uptimeSeconds};RELAY1=${relay1 ? 1 : 0};RELAY2=${relay2 ? 1 : 0};PWM=${pwmDuty}`
+        `STATUS:RPM1=${rpm1};RPM2=${rpm2};LAPS1=${laps1};LAPS2=${laps2};DELTA=${deltaLaps};V1=${inv1Volt};V2=${inv2Volt};SYNC=${syncStatus};VCC=${vccVoltage};UPTIME=${uptimeSeconds}`
       );
       return;
     }
 
+    if (upperCmd === 'ZERO_LAPS' || upperCmd === 'RESET_LAPS') {
+      this.simFractionalLaps1 = 0;
+      this.simFractionalLaps2 = 0;
+      this.simulatedTelemetry.laps1 = 0;
+      this.simulatedTelemetry.laps2 = 0;
+      this.simulatedTelemetry.deltaLaps = 0;
+      this.simIntegralError = 0;
+      this.handleIncomingLine('OK ZERO_LAPS (CONTADORES DE VOLTAS ZERADOS)');
+      return;
+    }
+
+    if (upperCmd === 'START') {
+      this.simulatedConfig.opMode = 'AUTO_SYNC';
+      this.handleIncomingLine('OK START (ESTEIRAS INICIADAS EM SINCRONISMO)');
+      return;
+    }
+
+    if (upperCmd === 'STOP') {
+      this.simulatedConfig.opMode = 'STOP';
+      this.handleIncomingLine('OK STOP (ESTEIRAS PARADAS)');
+      return;
+    }
+
     if (upperCmd === 'SAVE') {
-      this.handleIncomingLine('OK SAVED (EEPROM ATUALIZADA)');
+      this.handleIncomingLine('OK SAVED (EEPROM INTERNA DO PIC18F GRAVADA)');
       return;
     }
 
     if (upperCmd === 'RESET') {
       this.simulatedConfig = { ...DEFAULT_PIC_CONFIG };
-      this.handleIncomingLine('OK RESET (VALORES PADRAO RESTAURADOS)');
+      this.simFractionalLaps1 = 0;
+      this.simFractionalLaps2 = 0;
+      this.handleIncomingLine('OK RESET (PARAMETROS DE FABRICA RESTAURADOS)');
       this.handleIncomingLine(buildConfigString(this.simulatedConfig));
       return;
     }
 
     if (upperCmd.startsWith('SET ')) {
       const assignment = cmd.slice(4).trim();
-      const [key, ...valParts] = assignment.split('=');
-      const cleanKey = key.trim().toUpperCase();
-      const cleanVal = valParts.join('=').trim();
-
-      switch (cleanKey) {
-        case 'NAME':
-          this.simulatedConfig.deviceName = cleanVal;
-          break;
-        case 'BAUD':
-          this.simulatedConfig.baudRate = Number(cleanVal) || 115200;
-          break;
-        case 'INTERVAL':
-          this.simulatedConfig.sampleIntervalMs = Number(cleanVal) || 1000;
-          break;
-        case 'OFFSET':
-          this.simulatedConfig.tempOffset = parseFloat(cleanVal) || 0;
-          break;
-        case 'ALARM_HI':
-          this.simulatedConfig.alarmHigh = parseFloat(cleanVal) || 75;
-          break;
-        case 'ALARM_LO':
-          this.simulatedConfig.alarmLow = parseFloat(cleanVal) || 15;
-          break;
-        case 'RELAY1':
-          this.simulatedConfig.relay1 = cleanVal === '1' || cleanVal.toLowerCase() === 'true';
-          this.simulatedTelemetry.relay1 = this.simulatedConfig.relay1;
-          break;
-        case 'RELAY2':
-          this.simulatedConfig.relay2 = cleanVal === '1' || cleanVal.toLowerCase() === 'true';
-          this.simulatedTelemetry.relay2 = this.simulatedConfig.relay2;
-          break;
-        case 'PWM':
-          this.simulatedConfig.pwmDuty = Math.max(0, Math.min(100, parseInt(cleanVal, 10) || 0));
-          this.simulatedTelemetry.pwmDuty = this.simulatedConfig.pwmDuty;
-          break;
-        case 'MODE':
-          this.simulatedConfig.opMode = cleanVal.toUpperCase() as any;
-          break;
-        case 'BUZZER':
-          this.simulatedConfig.buzzerEnabled = cleanVal === '1' || cleanVal.toLowerCase() === 'true';
-          break;
-        default: {
-          const idx = this.simulatedConfig.customParams.findIndex((p) => p.key === cleanKey);
-          if (idx >= 0) {
-            this.simulatedConfig.customParams[idx].value = cleanVal;
-          } else {
-            this.simulatedConfig.customParams.push({
-              id: `p-${Date.now()}`,
-              key: cleanKey,
-              value: cleanVal
-            });
-          }
-          break;
-        }
+      if (assignment.includes('=')) {
+        const parsed = parseConfigString(assignment);
+        this.simulatedConfig = {
+          ...this.simulatedConfig,
+          ...parsed
+        };
+        this.handleIncomingLine(`OK SET ${assignment}`);
+      } else {
+        this.handleIncomingLine('ERR: FORMATO INVALIDO. USE SET CHAVE=VALOR');
       }
-
-      this.handleIncomingLine(`OK SET ${cleanKey}=${cleanVal}`);
       return;
     }
 
-    if (upperCmd === 'HELP') {
-      this.handleIncomingLine('COMANDOS DISPONIVEIS: PING, GET_ALL, SET <CHAVE>=<VALOR>, SAVE, RESET, STATUS, HELP');
-      return;
-    }
-
-    this.handleIncomingLine(`ERR COMANDO DESCONHECIDO: ${cmd}`);
+    // Default unknown command
+    this.handleIncomingLine(`ERR: COMANDO DESCONHECIDO "${cmd}". ENVIE HELP`);
   }
 }
 

@@ -15,7 +15,7 @@ import { serialManager } from './services/serialManager';
 
 export function App() {
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
-  const [baudRate, setBaudRate] = useState<number>(115200);
+  const [baudRate, setBaudRate] = useState<number>(9600);
   const [config, setConfig] = useState<PicConfig>(DEFAULT_PIC_CONFIG);
   const [telemetry, setTelemetry] = useState<PicTelemetry | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -36,19 +36,24 @@ export function App() {
       setConfig((prev) => ({
         ...prev,
         ...incoming,
-        // merge customParams if present
         customParams: incoming.customParams || prev.customParams
       }));
     });
 
     const unsubTelemetry = serialManager.onTelemetryReceived((incoming) => {
       setTelemetry((prev) => ({
-        currentTemp: incoming.currentTemp ?? prev?.currentTemp ?? 25.0,
+        rpm1: incoming.rpm1 ?? prev?.rpm1 ?? 0.0,
+        rpm2: incoming.rpm2 ?? prev?.rpm2 ?? 0.0,
+        laps1: incoming.laps1 ?? prev?.laps1 ?? 0,
+        laps2: incoming.laps2 ?? prev?.laps2 ?? 0,
+        deltaLaps: incoming.deltaLaps ?? prev?.deltaLaps ?? 0,
+        inv1Volt: incoming.inv1Volt ?? prev?.inv1Volt ?? 5.0,
+        inv2Volt: incoming.inv2Volt ?? prev?.inv2Volt ?? 5.0,
+        inv1Duty: incoming.inv1Duty ?? prev?.inv1Duty ?? 50,
+        inv2Duty: incoming.inv2Duty ?? prev?.inv2Duty ?? 50,
+        syncStatus: incoming.syncStatus ?? prev?.syncStatus ?? 'SYNCED',
         vccVoltage: incoming.vccVoltage ?? prev?.vccVoltage ?? 5.0,
         uptimeSeconds: incoming.uptimeSeconds ?? prev?.uptimeSeconds ?? 0,
-        relay1: incoming.relay1 ?? prev?.relay1 ?? false,
-        relay2: incoming.relay2 ?? prev?.relay2 ?? true,
-        pwmDuty: incoming.pwmDuty ?? prev?.pwmDuty ?? 50,
         lastUpdate: incoming.lastUpdate ?? Date.now()
       }));
     });
@@ -66,7 +71,7 @@ export function App() {
   };
 
   const handleConnectSimulation = () => {
-    serialManager.connectSimulation(baudRate);
+    serialManager.startSimulation();
   };
 
   const handleDisconnect = async () => {
@@ -117,7 +122,6 @@ export function App() {
               <ConfigEditor
                 config={config}
                 connectionState={connectionState}
-                onConfigChange={(newCfg) => setConfig(newCfg)}
               />
             </div>
             
@@ -151,17 +155,17 @@ export function App() {
       <footer className="border-t border-slate-800/80 bg-slate-950/60 py-4 mt-auto">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-slate-500">
           <div className="flex items-center gap-2">
-            <span>PIC Serial Configurator &bull; Web Serial API</span>
+            <span>supEsteiras &bull; PIC18F4620 @ 8MHz Interno &bull; MPLAB X 6.20 / XC8</span>
             <span className="text-slate-700">&bull;</span>
             <button
               onClick={() => setIsFirmwareModalOpen(true)}
               className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2"
             >
-              Ver Firmware XC8
+              Ver Firmware e Esquema Elétrico
             </button>
           </div>
           <div>
-            Pronto para microcontroladores Microchip PIC (PIC16F / PIC18F / PIC24 / dsPIC)
+            Controle de Sincronismo em Malha Fechada (Sensores RB0/RB1 &bull; Inversores 0-10V via PWM)
           </div>
         </div>
       </footer>

@@ -1,97 +1,108 @@
-# PIC Serial Configurator Pro ⚡
+# supEsteiras ⚡ Supervisório & Sincronismo de Esteiras (PIC18F4620)
 
-Aplicação web moderna para configuração, parametrização e monitoramento em tempo real de microcontroladores **Microchip PIC** (PIC16F, PIC18F, PIC24, dsPIC) através da **Web Serial API** do navegador.
-
----
-
-## 🚀 Funcionalidades
-
-1. **Comunicação Serial Direta no Navegador (Web Serial API)**:
-   - Conexão nativa com chips conversores USB-Serial (FT232, CH340, CP2102, PL2303) e portas COM virtuais CDC.
-   - Suporte a diversas taxas de transmissão: 2400, 9600, 19200, 38400, 57600 e 115200 bps.
-   - Detecção automática de compatibilidade do navegador (Google Chrome, Microsoft Edge, Opera).
-
-2. **Modo Simulação Integrado**:
-   - Permite testar toda a interface, envio/recebimento de comandos, alteração de parâmetros e gravação na EEPROM mesmo sem o PIC físico conectado no momento.
-
-3. **Editor de Parâmetros Completo**:
-   - **Identificação & Operação**: Nome do Dispositivo, Modo Operacional (`AUTO`, `MANUAL`, `ECO`, `CALIBRATION`) e Taxa de Amostragem.
-   - **Comunicação**: Seleção da taxa de transmissão UART.
-   - **Sensores & Alarmes**: Offset de calibração térmica, limites de alarme mínimo/máximo e controle de buzzer.
-   - **Controle de Saídas**: Acionamento direto de Relé 1 e Relé 2, e ajuste de duty cycle PWM (0 a 100%).
-   - **Campos Customizados**: Criação e envio dinâmico de novas variáveis chave=valor para o firmware.
-   - **Dirty Tracking**: Destaca valores modificados pendentes de envio.
-   - **Ações Rápidas**:
-     - `Ler do PIC (GET_ALL)`
-     - `Aplicar na RAM (SET)`
-     - `Gravar na EEPROM (SAVE)`
-     - `Restaurar Padrão de Fábrica (RESET)`
-
-4. **Telemetria & Diagnóstico em Tempo Real**:
-   - Monitor de Temperatura com indicação de faixa segura e alertas visuais.
-   - Monitor de Tensão de Alimentação (VCC).
-   - Tempo de atividade ininterrupta (*Uptime*) do microcontrolador.
-   - Polling automático e manual sob demanda.
-
-5. **Terminal Serial Interativo**:
-   - Visualizador de pacotes com timestamps e tags coloridas (`TX`, `RX`, `INFO`, `ERROR`, `SUCCESS`).
-   - Linha de comando com histórico navegável pelas teclas **Seta para Cima / Seta para Baixo**.
-   - Botões de atalho para comandos frequentes (`PING`, `GET_ALL`, `STATUS`, `SAVE`, `RESET`, `HELP`).
-   - Opções para pausar auto-scroll, copiar logs ou exportar para arquivo `.txt`.
-
-6. **Firmware C Pronto para Compilar (MPLAB XC8)**:
-   - Código-fonte em C completo para microcontroladores PIC (PIC16F877A, PIC18F4550, PIC18F25K22, etc.).
-   - Rotina de interrupção de recepção serial com buffer circular/linha.
-   - Parser dos comandos ASCII e gravação na memória EEPROM interna do microcontrolador.
-   - Guia de ligação de pinos (TX -> RX, RX -> TX, GND compartilhado, níveis 5V/3.3V).
+Aplicação web moderna para parametrização, sintonia em tempo real e supervisão de sincronismo entre duas esteiras industriais utilizando o microcontrolador **Microchip PIC18F4620** a **8.0 MHz (Oscilador Interno)** com **MPLAB X IDE v6.20** e compilador **MPLAB XC8**.
 
 ---
 
-## 🛠️ Como Executar
+## 🚀 Arquitetura do Sistema
 
-### Pré-requisitos
-- Node.js (versão 18 ou superior)
-- Navegador compatível com Web Serial (Google Chrome, Microsoft Edge, Opera, Brave)
-
-### Passos
-```bash
-# 1. Instalar dependências (já instaladas)
-npm install
-
-# 2. Iniciar o servidor de desenvolvimento local
-npm run dev
-
-# 3. Gerar build de produção
-npm run build
-```
-
-Abra a URL exibida no terminal (normalmente `http://localhost:5173`).
+1. **Microcontrolador**:
+   - **PIC18F4620** operando a **8.0 MHz** através do oscilador interno (HFINTOSC, `#pragma config OSC = INTIO67`), dispensando cristal externo e liberando os pinos RA6/RA7.
+2. **Sensores de Volta (1 pulso por volta completa)**:
+   - **Sensor Esteira 1 (Mestra)**: Conectado ao pino **RB0 (INT0)** por interrupção externa por borda de descida.
+   - **Sensor Esteira 2 (Sincronizada)**: Conectado ao pino **RB1 (INT1)** por interrupção externa por borda de descida.
+   - O firmware contabiliza as voltas totais de cada esteira e calcula o RPM instantâneo medindo o tempo decorrido entre os pulsos de volta.
+3. **Controle de Tensão dos Inversores (0 a 10V DC via PWM)**:
+   - Dois canais PWM a 4.0 kHz gerados pelos módulos CCP1 e CCP2 via Timer 2:
+     - **Canal PWM 1 (Pino RC2 / CCP1)**: Tensão de referência analógica para o Inversor 1.
+     - **Canal PWM 2 (Pino RC1 / CCP2)**: Tensão de referência analógica para o Inversor 2.
+   - Um filtro passa-baixa RC (10kΩ + 10µF) seguido de um amplificador operacional LM358 com ganho de 2x converte a onda PWM de 0-5V em uma tensão analógica contínua limpa de 0.0V a 10.0V DC.
+4. **Algoritmo de Sincronismo em Malha Fechada (PI / PID)**:
+   - A Esteira 1 opera na velocidade base selecionada.
+   - O controlador calcula o erro de fase `Delta = Voltas1 - Voltas2`.
+   - Se a Esteira 2 atrasar (`Delta > 0`), o controlador aplica um incremento de tensão proporcional e integral para acelerá-la temporariamente até o alinhamento perfeito.
+   - Se a Esteira 2 adiantar (`Delta < 0`), a tensão é reduzida proporcionalmente.
+   - Constantes de sintonia (Kp, Ki, Kd, tolerância e saturação máxima) podem ser ajustadas em tempo real via serial e gravadas permanentemente na **EEPROM interna**.
 
 ---
 
-## 🔌 Esquema de Ligação de Hardware
+## 💻 Interface Web (Web Serial API)
+
+- **Conexão Direta via USB-Serial**: Comunica-se diretamente com o conversor USB-Serial (FT232, CH340, CP2102) através do navegador (Chrome, Edge, Opera) a 9600 bps.
+- **Modo Simulação em Tempo Real**: Permite testar o comportamento da física das esteiras, rotações, contagem de voltas e resposta do algoritmo PI sem necessidade de hardware físico conectado.
+- **Painel de Telemetria Dinâmico**:
+  - Velocidade em RPM e voltas acumuladas de ambas as esteiras.
+  - Tensão enviada a cada inversor (0-10V) e Duty Cycle correspondente.
+  - Indicador visual e barra de alinhamento com tolerância segura e alarme de desalinhamento.
+  - Botão de ação rápida para **Zerar Contagem de Voltas (ZERO_LAPS)**.
+  - Botão de partida/parada segura (**START / STOP**).
+- **Editor de Parâmetros**:
+  - Ajuste de RPM alvo e tensões nominais dos inversores.
+  - Ganhos do controlador: **Kp** (Proporcional), **Ki** (Integral), **Kd** (Derivativo).
+  - Janela de tolerância de sincronismo (voltas) e saturação de correção (± Volts).
+  - Ações para **Ler do PIC**, **Aplicar na RAM**, **Gravar na EEPROM** e **Restaurar Padrões**.
+- **Terminal Serial Integrado**:
+  - Histórico de comandos com suporte às setas Cima/Baixo.
+  - Comandos rápidos e logs coloridos com exportação para `.txt`.
+- **Código C e Esquema Elétrico Integrados**:
+  - Modal com o código C completo pronto para compilar no MPLAB X 6.20, esquemático de ligação e instruções detalhadas.
+
+---
+
+## 🔌 Esquema de Ligações no PIC18F4620
 
 ```text
-[ COMPUTADOR ] <====== USB ======> [ CONVERSOR USB-SERIAL ]
-                                      Pino TXD --------> Pino RX do PIC (RC7 no PIC16F/18F)
-                                      Pino RXD <-------- Pino TX do PIC (RC6 no PIC16F/18F)
-                                      Pino GND --------- Pino GND (VSS) do PIC
-                                      Pino 5V  --------- Pino VDD (opcional)
-```
+               +-----------------------------------------+
+               |          PIC18F4620 (8MHz Interno)      |
+               +-----------------------------------------+
 
-> **Atenção aos Níveis de Tensão:** Verifique a tensão de operação do seu PIC. Se for 5V, certifique-se de que o jumper do conversor USB-Serial está em 5V. Para PICs de 3.3V, use nível lógico de 3.3V.
+ [ ALIMENTAÇÃO ]
+   Pinos 11 e 32 (VDD) ------------> +5V DC
+   Pinos 12 e 31 (VSS) ------------> GND Geral
+   Pino 1 (MCLR) ------------------> Resistor pull-up 10kΩ ao +5V
+
+ [ SENSORES DE VOLTA ]
+   Sensor Esteira 1 (Mestra) ------> Pino 33 (RB0 / INT0)  [Interrupção Externa 0]
+   Sensor Esteira 2 (Seguidora) ---> Pino 34 (RB1 / INT1)  [Interrupção Externa 1]
+   *(Usar optoacoplador se o sensor industrial for 24V)*
+
+ [ SAÍDAS ANALÓGICAS PARA INVERSORES (0 a 10V) ]
+   Pino 17 (RC2 / CCP1) ---> [ Filtro RC 10k/10uF ] ---> [ LM358 Ganho 2x ] ---> Entrada AI1 Inversor 1 (0-10V)
+   Pino 16 (RC1 / CCP2) ---> [ Filtro RC 10k/10uF ] ---> [ LM358 Ganho 2x ] ---> Entrada AI1 Inversor 2 (0-10V)
+
+ [ COMUNICAÇÃO SERIAL UART ]
+   Pino 25 (RC6 / TX) -------------> RX do Conversor USB-Serial
+   Pino 26 (RC7 / RX) <------------- TX do Conversor USB-Serial
+   GND ----------------------------> GND do Conversor USB-Serial
+
+ [ SINALIZAÇÃO DE ALARME ]
+   Pino 35 (RB2) ------------------> Transistor BC548 / Buzzer 5V ou Relé de Alarme
+```
 
 ---
 
-## 📑 Protocolo de Comandos Serial (ASCII)
+## 📁 Estrutura do Firmware (`firmware/`)
 
-Todos os comandos são transmitidos em texto ASCII finalizados por `\n`:
+A pasta `firmware/` contém o projeto completo para **MPLAB X IDE v6.20**:
+- `config_bits.h`: Bits de configuração para o PIC18F4620 com oscilador interno 8MHz (`INTIO67`) e `PBADEN = OFF`.
+- `uart.h` / `uart.c`: Driver UART a 9600 bps com buffer circular por interrupção.
+- `pwm.h` / `pwm.c`: Controle PWM de 4kHz nos módulos CCP1 (RC2) e CCP2 (RC1) mapeados em 0-10V.
+- `sync_control.h` / `sync_control.c`: Algoritmo de malha fechada PI/PID, cálculo de RPM e medição de voltas.
+- `eeprom.h` / `eeprom.c`: Leitura e gravação não-volátil dos parâmetros de calibração.
+- `main.c`: Ponto de entrada e rotina de interrupção unificada.
+- `sup_esteiras_pic18f4620.c`: Versão completa monolítica em arquivo único para compilação imediata.
 
-| Comando | Resposta do PIC | Descrição |
-| :--- | :--- | :--- |
-| `PING\n` | `PONG\n` | Testa se o PIC está respondendo na porta serial. |
-| `GET_ALL\n` | `CFG:NAME=...;BAUD=...;...\n` | Solicita todas as configurações ativas do PIC. |
-| `SET <CHAVE>=<VALOR>\n` | `OK SET <CHAVE>=<VALOR>\n` | Atualiza uma variável na RAM do PIC (ex: `SET RELAY1=1`). |
-| `SAVE\n` | `OK SAVED\n` | Grava as configurações da RAM na EEPROM interna não-volátil. |
-| `RESET\n` | `OK RESET\n` | Restaura os parâmetros de fábrica no firmware. |
-| `STATUS\n` | `STATUS:TEMP=24.5;VCC=5.01;...\n` | Retorna leituras analógicas e telemetria atual. |
+---
+
+## 🛠️ Como Executar a Aplicação Web
+
+```bash
+# Instalar dependências
+npm install
+
+# Iniciar servidor local
+npm run dev
+
+# Gerar build de produção
+npm run build
+```

@@ -1,10 +1,13 @@
-import type { PicConfig, PicTelemetry, OpMode, CustomParam } from '../types/pic';
+import type { PicConfig, PicTelemetry, SyncOpMode, CustomParam, SyncStatus } from '../types/pic';
 
 /**
- * Protocol specification:
- * - Commands end with newline `\n` or `\r\n`.
- * - Human-readable ASCII keys:
- *    NAME, BAUD, INTERVAL, OFFSET, ALARM_HI, ALARM_LO, RELAY1, RELAY2, PWM, MODE, BUZZER
+ * Protocol specification for supEsteiras (PIC18F4620 @ 8MHz):
+ * - ASCII strings ending in '\n' or '\r\n'.
+ * - Keys:
+ *    NAME, BAUD, INTERVAL, RPM_TARGET, BASE_V1, BASE_V2, KP, KI, KD,
+ *    SYNC_TOL, MAX_CORR, MODE, INV1_EN, INV2_EN, BUZZER
+ * - Telemetry STATUS format:
+ *    STATUS:RPM1=45.2;RPM2=45.1;LAPS1=120;LAPS2=120;DELTA=0;V1=5.00;V2=5.05;SYNC=SYNCED;VCC=5.02;UPTIME=320
  */
 
 export function parseConfigString(payload: string): Partial<PicConfig> {
@@ -13,7 +16,6 @@ export function parseConfigString(payload: string): Partial<PicConfig> {
   // Clean prefix if present (e.g. "CFG:...")
   const cleanPayload = payload.startsWith('CFG:') ? payload.slice(4) : payload;
   const parts = cleanPayload.split(';');
-
   const customParams: CustomParam[] = [];
 
   for (const part of parts) {
@@ -27,39 +29,56 @@ export function parseConfigString(payload: string): Partial<PicConfig> {
         result.deviceName = val;
         break;
       case 'BAUD':
-        result.baudRate = Number(val) || 115200;
+        result.baudRate = Number(val) || 9600;
         break;
       case 'INTERVAL':
         result.sampleIntervalMs = Number(val) || 1000;
         break;
-      case 'OFFSET':
-        result.tempOffset = parseFloat(val) || 0.0;
+      case 'RPM_TARGET':
+      case 'TARGET_RPM':
+        result.targetRpm = parseFloat(val) || 0.0;
         break;
-      case 'ALARM_HI':
-        result.alarmHigh = parseFloat(val) || 75.0;
+      case 'BASE_V1':
+      case 'VOLT1':
+        result.baseVolt1 = Math.max(0, Math.min(10, parseFloat(val) || 0.0));
         break;
-      case 'ALARM_LO':
-        result.alarmLow = parseFloat(val) || 15.0;
+      case 'BASE_V2':
+      case 'VOLT2':
+        result.baseVolt2 = Math.max(0, Math.min(10, parseFloat(val) || 0.0));
         break;
-      case 'RELAY1':
-        result.relay1 = val === '1' || val.toLowerCase() === 'true';
+      case 'KP':
+        result.kp = parseFloat(val) || 0.0;
         break;
-      case 'RELAY2':
-        result.relay2 = val === '1' || val.toLowerCase() === 'true';
+      case 'KI':
+        result.ki = parseFloat(val) || 0.0;
         break;
-      case 'PWM':
-        result.pwmDuty = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
+      case 'KD':
+        result.kd = parseFloat(val) || 0.0;
         break;
-      case 'MODE':
-        if (['AUTO', 'MANUAL', 'ECO', 'CALIBRATION'].includes(val.toUpperCase())) {
-          result.opMode = val.toUpperCase() as OpMode;
+      case 'SYNC_TOL':
+      case 'TOL':
+        result.syncToleranceLaps = parseFloat(val) || 0.1;
+        break;
+      case 'MAX_CORR':
+        result.maxCorrectionVolt = Math.max(0, Math.min(10, parseFloat(val) || 2.5));
+        break;
+      case 'MODE': {
+        const upper = val.toUpperCase();
+        if (['AUTO_SYNC', 'MANUAL', 'CALIBRATION', 'STOP'].includes(upper)) {
+          result.opMode = upper as SyncOpMode;
         }
         break;
+      }
+      case 'INV1_EN':
+        result.inverter1Enabled = val === '1' || val.toLowerCase() === 'true';
+        break;
+      case 'INV2_EN':
+        result.inverter2Enabled = val === '1' || val.toLowerCase() === 'true';
+        break;
       case 'BUZZER':
-        result.buzzerEnabled = val === '1' || val.toLowerCase() === 'true';
+        result.buzzerAlarmEnabled = val === '1' || val.toLowerCase() === 'true';
         break;
       case 'EXTRA': {
-        // e.g. EXTRA:LOCATION=SALA,FILTER=0.5
         const pairs = val.split(',');
         for (let i = 0; i < pairs.length; i++) {
           const [k, v] = pairs[i].split('=');
@@ -74,7 +93,6 @@ export function parseConfigString(payload: string): Partial<PicConfig> {
         break;
       }
       default:
-        // Treat unknown keys as custom parameters
         customParams.push({
           id: `param-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
           key,
@@ -92,7 +110,7 @@ export function parseConfigString(payload: string): Partial<PicConfig> {
 }
 
 export function parseTelemetryString(payload: string): Partial<PicTelemetry> | null {
-  if (!payload.includes('STATUS:') && !payload.includes('TEMP=')) {
+  if (!payload.includes('STATUS:') && !payload.includes('RPM1=') && !payload.includes('LAPS1=')) {
     return null;
   }
 
@@ -109,25 +127,56 @@ export function parseTelemetryString(payload: string): Partial<PicTelemetry> | n
     const val = valParts.join('=').trim();
 
     switch (key) {
-      case 'TEMP':
-        telemetry.currentTemp = parseFloat(val) || 0;
+      case 'RPM1':
+        telemetry.rpm1 = parseFloat(val) || 0.0;
         break;
+      case 'RPM2':
+        telemetry.rpm2 = parseFloat(val) || 0.0;
+        break;
+      case 'LAPS1':
+        telemetry.laps1 = parseInt(val, 10) || 0;
+        break;
+      case 'LAPS2':
+        telemetry.laps2 = parseInt(val, 10) || 0;
+        break;
+      case 'DELTA':
+      case 'DIFF':
+        telemetry.deltaLaps = parseFloat(val) || 0;
+        break;
+      case 'V1':
+      case 'VOLT1': {
+        const v1 = parseFloat(val) || 0.0;
+        telemetry.inv1Volt = v1;
+        telemetry.inv1Duty = Math.round((v1 / 10.0) * 100);
+        break;
+      }
+      case 'V2':
+      case 'VOLT2': {
+        const v2 = parseFloat(val) || 0.0;
+        telemetry.inv2Volt = v2;
+        telemetry.inv2Duty = Math.round((v2 / 10.0) * 100);
+        break;
+      }
+      case 'SYNC':
+      case 'STATE': {
+        const upper = val.toUpperCase();
+        if (['SYNCED', 'ADJUSTING', 'DESYNC_ALARM', 'STOPPED'].includes(upper)) {
+          telemetry.syncStatus = upper as SyncStatus;
+        }
+        break;
+      }
       case 'VCC':
         telemetry.vccVoltage = parseFloat(val) || 5.0;
         break;
       case 'UPTIME':
         telemetry.uptimeSeconds = parseInt(val, 10) || 0;
         break;
-      case 'RELAY1':
-        telemetry.relay1 = val === '1' || val.toLowerCase() === 'true';
-        break;
-      case 'RELAY2':
-        telemetry.relay2 = val === '1' || val.toLowerCase() === 'true';
-        break;
-      case 'PWM':
-        telemetry.pwmDuty = parseInt(val, 10) || 0;
-        break;
     }
+  }
+
+  // Derive deltaLaps if not provided
+  if (telemetry.deltaLaps === undefined && telemetry.laps1 !== undefined && telemetry.laps2 !== undefined) {
+    telemetry.deltaLaps = telemetry.laps1 - telemetry.laps2;
   }
 
   return telemetry;
@@ -151,14 +200,18 @@ export function buildConfigString(config: PicConfig): string {
     `NAME=${config.deviceName}`,
     `BAUD=${config.baudRate}`,
     `INTERVAL=${config.sampleIntervalMs}`,
-    `OFFSET=${config.tempOffset.toFixed(1)}`,
-    `ALARM_HI=${config.alarmHigh.toFixed(1)}`,
-    `ALARM_LO=${config.alarmLow.toFixed(1)}`,
-    `RELAY1=${config.relay1 ? 1 : 0}`,
-    `RELAY2=${config.relay2 ? 1 : 0}`,
-    `PWM=${Math.round(config.pwmDuty)}`,
+    `RPM_TARGET=${config.targetRpm.toFixed(1)}`,
+    `BASE_V1=${config.baseVolt1.toFixed(2)}`,
+    `BASE_V2=${config.baseVolt2.toFixed(2)}`,
+    `KP=${config.kp.toFixed(2)}`,
+    `KI=${config.ki.toFixed(2)}`,
+    `KD=${config.kd.toFixed(2)}`,
+    `SYNC_TOL=${config.syncToleranceLaps.toFixed(2)}`,
+    `MAX_CORR=${config.maxCorrectionVolt.toFixed(2)}`,
     `MODE=${config.opMode}`,
-    `BUZZER=${config.buzzerEnabled ? 1 : 0}`
+    `INV1_EN=${config.inverter1Enabled ? 1 : 0}`,
+    `INV2_EN=${config.inverter2Enabled ? 1 : 0}`,
+    `BUZZER=${config.buzzerAlarmEnabled ? 1 : 0}`
   ];
 
   if (customStr.length > 0) {
@@ -180,29 +233,41 @@ export function getChangedCommands(current: PicConfig, original: PicConfig): str
   if (current.sampleIntervalMs !== original.sampleIntervalMs) {
     commands.push(formatSetCommand('INTERVAL', current.sampleIntervalMs));
   }
-  if (current.tempOffset !== original.tempOffset) {
-    commands.push(formatSetCommand('OFFSET', current.tempOffset));
+  if (current.targetRpm !== original.targetRpm) {
+    commands.push(formatSetCommand('RPM_TARGET', current.targetRpm.toFixed(1)));
   }
-  if (current.alarmHigh !== original.alarmHigh) {
-    commands.push(formatSetCommand('ALARM_HI', current.alarmHigh));
+  if (current.baseVolt1 !== original.baseVolt1) {
+    commands.push(formatSetCommand('BASE_V1', current.baseVolt1.toFixed(2)));
   }
-  if (current.alarmLow !== original.alarmLow) {
-    commands.push(formatSetCommand('ALARM_LO', current.alarmLow));
+  if (current.baseVolt2 !== original.baseVolt2) {
+    commands.push(formatSetCommand('BASE_V2', current.baseVolt2.toFixed(2)));
   }
-  if (current.relay1 !== original.relay1) {
-    commands.push(formatSetCommand('RELAY1', current.relay1));
+  if (current.kp !== original.kp) {
+    commands.push(formatSetCommand('KP', current.kp.toFixed(2)));
   }
-  if (current.relay2 !== original.relay2) {
-    commands.push(formatSetCommand('RELAY2', current.relay2));
+  if (current.ki !== original.ki) {
+    commands.push(formatSetCommand('KI', current.ki.toFixed(2)));
   }
-  if (current.pwmDuty !== original.pwmDuty) {
-    commands.push(formatSetCommand('PWM', Math.round(current.pwmDuty)));
+  if (current.kd !== original.kd) {
+    commands.push(formatSetCommand('KD', current.kd.toFixed(2)));
+  }
+  if (current.syncToleranceLaps !== original.syncToleranceLaps) {
+    commands.push(formatSetCommand('SYNC_TOL', current.syncToleranceLaps.toFixed(2)));
+  }
+  if (current.maxCorrectionVolt !== original.maxCorrectionVolt) {
+    commands.push(formatSetCommand('MAX_CORR', current.maxCorrectionVolt.toFixed(2)));
   }
   if (current.opMode !== original.opMode) {
     commands.push(formatSetCommand('MODE', current.opMode));
   }
-  if (current.buzzerEnabled !== original.buzzerEnabled) {
-    commands.push(formatSetCommand('BUZZER', current.buzzerEnabled));
+  if (current.inverter1Enabled !== original.inverter1Enabled) {
+    commands.push(formatSetCommand('INV1_EN', current.inverter1Enabled));
+  }
+  if (current.inverter2Enabled !== original.inverter2Enabled) {
+    commands.push(formatSetCommand('INV2_EN', current.inverter2Enabled));
+  }
+  if (current.buzzerAlarmEnabled !== original.buzzerAlarmEnabled) {
+    commands.push(formatSetCommand('BUZZER', current.buzzerAlarmEnabled));
   }
 
   // Check custom params

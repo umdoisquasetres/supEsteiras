@@ -103,13 +103,15 @@ export const SerialTerminal: React.FC<SerialTerminalProps> = ({
 
   const quickCommands = [
     { label: 'PING', cmd: 'PING' },
-    { label: 'GET_ALL', cmd: 'GET_ALL' },
     { label: 'STATUS', cmd: 'STATUS' },
+    { label: 'GET_ALL', cmd: 'GET_ALL' },
+    { label: 'ZERAR VOLTAS', cmd: 'ZERO_LAPS' },
+    { label: 'PARTIR', cmd: 'START' },
+    { label: 'PARAR', cmd: 'STOP' },
     { label: 'SAVE (EEPROM)', cmd: 'SAVE' },
     { label: 'RESET', cmd: 'RESET' },
+    { label: 'SET KP=1.0', cmd: 'SET KP=1.00' },
     { label: 'HELP', cmd: 'HELP' },
-    { label: 'RELÉ 1 ON', cmd: 'SET RELAY1=1' },
-    { label: 'RELÉ 1 OFF', cmd: 'SET RELAY1=0' },
   ];
 
   return (

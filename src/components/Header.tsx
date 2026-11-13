@@ -44,20 +44,23 @@ export const Header: React.FC<HeaderProps> = ({
           
           {/* Logo & Title */}
           <div className="flex items-center space-x-3">
-            <div className="p-2.5 bg-gradient-to-br from-indigo-600 to-blue-500 rounded-xl shadow-lg shadow-indigo-500/20 text-white flex items-center justify-center">
+            <div className="p-2.5 bg-gradient-to-br from-indigo-600 via-blue-600 to-teal-500 rounded-xl shadow-lg shadow-indigo-500/20 text-white flex items-center justify-center">
               <Cpu className="w-6 h-6" />
             </div>
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-xl font-bold tracking-tight text-white flex items-center gap-1.5">
-                  PIC Serial Configurator
+                  supEsteiras
                 </h1>
-                <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-                  Microchip PIC
+                <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                  PIC18F4620 @ 8MHz
+                </span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded font-mono bg-slate-800 text-slate-400 border border-slate-700">
+                  MPLAB X 6.20 / XC8
                 </span>
               </div>
               <p className="text-xs text-slate-400">
-                Gerenciador e Editor de Parâmetros de Firmware via Web Serial
+                Supervisório e Sincronismo de Esteiras Industriais via Web Serial
               </p>
             </div>
           </div>
@@ -73,7 +76,7 @@ export const Header: React.FC<HeaderProps> = ({
               }`}
             >
               <Activity className="w-4 h-4" />
-              <span>Configurações</span>
+              <span>Controle & Sincronismo</span>
             </button>
 
             <button
@@ -97,25 +100,25 @@ export const Header: React.FC<HeaderProps> = ({
               }`}
             >
               <Code2 className="w-4 h-4" />
-              <span>Código C (PIC)</span>
+              <span>Firmware XC8 (PIC18F)</span>
             </button>
           </div>
 
-          {/* Connection Controls & Status */}
-          <div className="flex flex-wrap items-center gap-2.5 w-full lg:w-auto">
+          {/* Connection Controls */}
+          <div className="flex flex-wrap items-center gap-2.5 self-stretch sm:self-auto justify-end">
             
-            {/* Baud Rate selector */}
-            <div className="flex items-center gap-1.5 bg-slate-800/90 border border-slate-700 rounded-lg px-2.5 py-1.5">
-              <span className="text-xs text-slate-400 font-medium">Baud:</span>
+            {/* Baud selector */}
+            <div className="flex items-center bg-slate-800/80 rounded-lg px-2.5 py-1.5 border border-slate-700/60 text-xs">
+              <Radio className="w-3.5 h-3.5 text-slate-400 mr-1.5" />
               <select
-                disabled={connectionState !== 'disconnected'}
                 value={baudRate}
+                disabled={connectionState === 'connected'}
                 onChange={(e) => onBaudRateChange(Number(e.target.value))}
-                className="bg-transparent text-xs font-semibold text-white focus:outline-none cursor-pointer disabled:opacity-60"
+                className="bg-transparent text-slate-200 text-xs focus:outline-none cursor-pointer disabled:cursor-not-allowed font-mono"
               >
                 {SUPPORTED_BAUD_RATES.map((rate) => (
-                  <option key={rate} value={rate} className="bg-slate-800 text-white">
-                    {rate} bps
+                  <option key={rate} value={rate} className="bg-slate-900 text-white">
+                    {rate} bps {rate === 9600 && '(Padrão)'}
                   </option>
                 ))}
               </select>
@@ -123,19 +126,12 @@ export const Header: React.FC<HeaderProps> = ({
 
             {/* Connection Actions */}
             {connectionState === 'disconnected' ? (
-              <div className="flex items-center gap-2">
+              <>
                 <button
                   onClick={onConnectPhysical}
-                  title={
-                    isWebSerialSupported
-                      ? 'Conectar via porta serial USB'
-                      : 'Web Serial requer Chrome, Edge ou Opera'
-                  }
-                  className={`flex items-center gap-2 px-3.5 py-1.5 text-xs sm:text-sm font-medium rounded-lg shadow-sm transition-all text-white ${
-                    isWebSerialSupported
-                      ? 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-700/30 active:scale-95'
-                      : 'bg-slate-700 opacity-60 cursor-not-allowed'
-                  }`}
+                  disabled={!isWebSerialSupported}
+                  className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-600/30 transition-all active:scale-95 disabled:opacity-50"
+                  title={!isWebSerialSupported ? 'Navegador incompatível com Web Serial' : 'Conectar via porta USB-Serial COM'}
                 >
                   <Usb className="w-4 h-4" />
                   <span>Conectar PIC</span>
@@ -143,73 +139,47 @@ export const Header: React.FC<HeaderProps> = ({
 
                 <button
                   onClick={onConnectSimulation}
-                  title="Testar com um microcontrolador PIC virtual simulado"
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs sm:text-sm font-medium rounded-lg bg-blue-600/20 text-blue-300 border border-blue-500/30 hover:bg-blue-600/30 transition-all active:scale-95"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-all active:scale-95"
+                  title="Simular microcontrolador PIC18F4620 virtual com esteiras ativas"
                 >
-                  <Radio className="w-3.5 h-3.5" />
-                  <span>Simular</span>
+                  <Cpu className="w-4 h-4 text-emerald-400" />
+                  <span>Modo Simulação</span>
+                </button>
+              </>
+            ) : (
+              <div className="flex items-center gap-2">
+                <span
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${
+                    connectionState === 'connected'
+                      ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                      : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                  }`}
+                >
+                  <span className="w-2 h-2 rounded-full bg-current animate-ping" />
+                  <span>{connectionState === 'connected' ? 'PIC Conectado' : 'Simulador PIC18F'}</span>
+                </span>
+
+                <button
+                  onClick={onDisconnect}
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/30 transition-all active:scale-95"
+                  title="Desconectar porta serial"
+                >
+                  <Unplug className="w-3.5 h-3.5" />
+                  <span>Desconectar</span>
                 </button>
               </div>
-            ) : (
-              <button
-                onClick={onDisconnect}
-                className="flex items-center gap-2 px-3.5 py-1.5 text-xs sm:text-sm font-medium rounded-lg bg-rose-600/20 border border-rose-500/40 text-rose-300 hover:bg-rose-600/30 transition-all active:scale-95"
-              >
-                <Unplug className="w-4 h-4" />
-                <span>Desconectar</span>
-              </button>
             )}
-
-            {/* Status Indicator Badge */}
-            <div
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium ${
-                connectionState === 'connected'
-                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
-                  : connectionState === 'simulated'
-                  ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30 animate-pulse'
-                  : connectionState === 'connecting'
-                  ? 'bg-amber-500/10 text-amber-400 border-amber-500/30 animate-pulse'
-                  : 'bg-slate-800 text-slate-400 border-slate-700'
-              }`}
-            >
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  connectionState === 'connected'
-                    ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]'
-                    : connectionState === 'simulated'
-                    ? 'bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.8)]'
-                    : connectionState === 'connecting'
-                    ? 'bg-amber-400'
-                    : 'bg-slate-500'
-                }`}
-              />
-              <span className="capitalize">
-                {connectionState === 'connected' && 'Online (COM)'}
-                {connectionState === 'simulated' && 'Modo Simulado'}
-                {connectionState === 'connecting' && 'Conectando...'}
-                {connectionState === 'disconnected' && 'Desconectado'}
-              </span>
-            </div>
-
           </div>
 
         </div>
 
-        {/* Warning if browser lacks Web Serial API */}
+        {/* Warning if Web Serial not supported */}
         {!isWebSerialSupported && (
-          <div className="mt-3 bg-amber-950/40 border border-amber-600/30 rounded-lg p-2.5 flex items-center justify-between text-xs text-amber-200">
-            <div className="flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
-              <span>
-                Seu navegador não suporta <strong>Web Serial API</strong>. Para conectar a um PIC físico via USB, use o <strong>Google Chrome, Microsoft Edge ou Opera</strong>. Você ainda pode usar o <strong>Modo Simulado</strong> para testar todas as funções!
-              </span>
-            </div>
-            <button
-              onClick={onConnectSimulation}
-              className="ml-3 px-2 py-1 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 rounded text-amber-300 font-semibold shrink-0"
-            >
-              Iniciar Simulação
-            </button>
+          <div className="mt-3 py-1.5 px-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>
+              A <strong>Web Serial API</strong> não está disponível neste navegador. Use o Google Chrome, Microsoft Edge ou Opera para conectar portas seriais físicas, ou clique em <strong>Modo Simulação</strong>.
+            </span>
           </div>
         )}
       </div>
